@@ -1,0 +1,126 @@
+name: Build Template AWS (ECR)
+
+on:
+  workflow_call:
+    inputs:
+      build-id:
+        description: "ID da build"
+        required: true
+        type: string
+      environment:
+        description: "Environment"
+        required: true
+        type: string
+      namespace:
+        description: "Namespace (mantido por padrão de pipeline)"
+        required: true
+        type: string
+      project:
+        description: "Project"
+        required: true
+        type: string
+      registry:
+        description: "ECR Registry (ex: 123456789012.dkr.ecr.us-east-1.amazonaws.com)"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS Region"
+        required: true
+        type: string
+      dockerfile-path:
+        description: "Path do Dockerfile"
+        required: false
+        type: string
+        default: "Dockerfile"
+      context:
+        description: "Build context"
+        required: false
+        type: string
+        default: "."
+      version-prefix:
+        description: "Prefixo de versão"
+        required: false
+        type: string
+        default: "0.0"
+
+    outputs:
+      image-version:
+        description: "Tag versionada gerada"
+        value: ${{ jobs.Build_And_Push_to_ECR.outputs.image-version }}
+      image-latest:
+        description: "Tag latest gerada"
+        value: ${{ jobs.Build_And_Push_to_ECR.outputs.image-latest }}
+      ecr-repository:
+        description: "Nome do repositório criado/usado no ECR"
+        value: ${{ jobs.Build_And_Push_to_ECR.outputs.ecr-repository }}
+
+env:
+  environment: ${{ inputs.environment }}
+  namespace: ${{ inputs.namespace }}
+  project: ${{ inputs.project }}
+  registry: ${{ inputs.registry }}
+
+jobs:
+  Build_And_Push_to_ECR:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+
+    outputs:
+      image-version: ${{ steps.meta.outputs.image-version }}
+      image-latest: ${{ steps.meta.outputs.image-latest }}
+      ecr-repository: ${{ steps.repo.outputs.ecr-repository }}
+
+    steps:
+      - name: Checkout Código
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Definir repositório ECR (padrão environment/project)
+        id: repo
+        shell: bash
+        run: |
+          ECR_REPO="${{ inputs.environment }}/${{ inputs.project }}"
+          echo "ecr-repository=${ECR_REPO}" >> $GITHUB_OUTPUT
+
+      - name: Garantir repositório no ECR
+        shell: bash
+        run: |
+          ECR_REPO="${{ steps.repo.outputs.ecr-repository }}"
+          aws ecr describe-repositories --repository-names "${ECR_REPO}" >/dev/null 2>&1 || \
+          aws ecr create-repository --repository-name "${ECR_REPO}" >/dev/null
+
+      - name: Login no Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Definir tags da imagem
+        id: meta
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version-prefix }}.${BUILD_NUMBER}"
+
+          IMAGE_VERSION="${{ env.registry }}/${{ steps.repo.outputs.ecr-repository }}:${VERSION}"
+          IMAGE_LATEST="${{ env.registry }}/${{ steps.repo.outputs.ecr-repository }}:latest"
+
+          echo "image-version=${IMAGE_VERSION}" >> $GITHUB_OUTPUT
+          echo "image-latest=${IMAGE_LATEST}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker Image
+        run: |
+          docker build -t "${{ steps.meta.outputs.image-version }}" \
+            --build-arg ENVIRONMENT="${{ env.environment }}" \
+            -f "${{ inputs.dockerfile-path }}" "${{ inputs.context }}"
+
+          docker tag "${{ steps.meta.outputs.image-version }}" "${{ steps.meta.outputs.image-latest }}"
+
+      - name: Push Docker Image para o ECR
+        run: |
+          docker push "${{ steps.meta.outputs.image-version }}"
+          docker push "${{ steps.meta.outputs.image-latest }}"

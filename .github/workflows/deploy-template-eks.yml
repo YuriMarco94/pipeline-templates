@@ -1,0 +1,58 @@
+name: Deploy Template AWS (EKS)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Environment"
+        required: true
+        type: string
+      namespace:
+        description: "Namespace Kubernetes"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS Region"
+        required: true
+        type: string
+      eks-cluster-name:
+        description: "Nome do cluster EKS"
+        required: true
+        type: string
+      manifest-path:
+        description: "Caminho dos manifests"
+        required: false
+        type: string
+        default: "kubernetes/manifests"
+
+env:
+  environment: ${{ inputs.environment }}
+  namespace: ${{ inputs.namespace }}
+
+jobs:
+  Deploy_To_EKS:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Código
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ inputs.eks-cluster-name }}" \
+            --region "${{ inputs.aws-region }}"
+
+      - name: Apply Manifests
+        run: |
+          kubectl apply -f "${{ inputs.manifest-path }}"
+          kubectl get ns
+          kubectl get pods -n "${{ inputs.namespace }}"

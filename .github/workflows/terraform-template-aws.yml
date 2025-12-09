@@ -1,0 +1,75 @@
+name: Terraform Template AWS
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Environment"
+        required: true
+        type: string
+      aws-region:
+        description: "AWS Region"
+        required: true
+        type: string
+      workspace:
+        description: "Terraform workspace (opcional)"
+        required: false
+        type: string
+        default: ""
+      terraform-path:
+        description: "Pasta onde está o root do Terraform"
+        required: false
+        type: string
+        default: "."
+      auto-apply:
+        description: "Executa apply automaticamente"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  Terraform:
+    name: Terraform (fmt/init/validate/plan/apply)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Código
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Terraform fmt
+        working-directory: ${{ inputs.terraform-path }}
+        run: terraform fmt -recursive
+
+      - name: Terraform init
+        working-directory: ${{ inputs.terraform-path }}
+        run: terraform init
+
+      - name: Terraform workspace select/create
+        if: ${{ inputs.workspace != '' }}
+        working-directory: ${{ inputs.terraform-path }}
+        run: |
+          terraform workspace select "${{ inputs.workspace }}" || \
+          terraform workspace new "${{ inputs.workspace }}"
+
+      - name: Terraform validate
+        working-directory: ${{ inputs.terraform-path }}
+        run: terraform validate -no-color
+
+      - name: Terraform plan
+        working-directory: ${{ inputs.terraform-path }}
+        run: terraform plan -no-color
+
+      - name: Terraform apply
+        if: ${{ inputs.auto-apply }}
+        working-directory: ${{ inputs.terraform-path }}
+        run: terraform apply -auto-approve

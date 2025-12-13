@@ -107,20 +107,20 @@ on:
       # Outputs do Build
       image-version:
         description: "Tag versionada gerada"
-        value: ${{ jobs.Pipeline_Completa.outputs.image-version }}
+        value: ${{ jobs.build.outputs.image-version }}
       image-latest:
         description: "Tag latest gerada"
-        value: ${{ jobs.Pipeline_Completa.outputs.image-latest }}
+        value: ${{ jobs.build.outputs.image-latest }}
       ecr-repository:
         description: "Nome do repositório ECR"
-        value: ${{ jobs.Pipeline_Completa.outputs.ecr-repository }}
+        value: ${{ jobs.build.outputs.ecr-repository }}
       # Outputs do Terraform
       cluster-name:
         description: "Nome do cluster EKS"
-        value: ${{ jobs.Pipeline_Completa.outputs.cluster-name }}
+        value: ${{ jobs.terraform.outputs.cluster-name }}
       cluster-endpoint:
         description: "Endpoint do cluster EKS"
-        value: ${{ jobs.Pipeline_Completa.outputs.cluster-endpoint }}
+        value: ${{ jobs.terraform.outputs.cluster-endpoint }}
 
 env:
   ENVIRONMENT: ${{ inputs.environment }}
@@ -129,51 +129,37 @@ env:
   ECR_REGISTRY: ${{ inputs.ecr-registry }}
 
 jobs:
-  Pipeline_Completa:
-    name: Pipeline Completa (Terraform + Build + Deploy)
+  # ============================================
+  # JOB 1: TERRAFORM - INFRAESTRUTURA
+  # ============================================
+  terraform:
+    if: ${{ !inputs.skip-terraform }}
+    name: "🚀 1. Terraform - Provisionar Infra"
     runs-on: ubuntu-latest
     env:
-      BUILD_NUMBER: ${{ github.run_number }}
-      SKIP_TERRAFORM: ${{ inputs.skip-terraform }}
-      SKIP_BUILD: ${{ inputs.skip-build }}
-      SKIP_DEPLOY: ${{ inputs.skip-deploy }}
-      DEPLOY_ADDONS: ${{ inputs.deploy-addons }}
       TF_PATH: ${{ inputs.terraform-path }}
-      K8S_MANIFEST_PATH: ${{ inputs.k8s-manifest-path }}
-      K8S_OVERLAY: ${{ inputs.k8s-overlay }}
-
+    
     outputs:
-      image-version: ${{ steps.build-meta.outputs.image-version }}
-      image-latest: ${{ steps.build-meta.outputs.image-latest }}
-      ecr-repository: ${{ steps.ecr-repo.outputs.ecr-repository }}
       cluster-name: ${{ steps.terraform-outputs.outputs.cluster-name }}
       cluster-endpoint: ${{ steps.terraform-outputs.outputs.cluster-endpoint }}
 
     steps:
-      # ============================================
-      # 1. CHECKOUT E CONFIGURAÇÃO INICIAL
-      # ============================================
-      - name: Checkout Código
+      - name: 📥 Checkout Código
         uses: actions/checkout@v4
 
-      - name: Configurar AWS Credentials
+      - name: 🔑 Configurar AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ============================================
-      # 2. TERRAFORM - INFRAESTRUTURA (CORRIGIDO)
-      # ============================================
-      - name: Setup Terraform
-        if: env.SKIP_TERRAFORM == 'false'
+      - name: ⚙️ Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '~> 1.9.0'
 
-      - name: Corrigir arquivos Terraform (remove AWS profile)
-        if: env.SKIP_TERRAFORM == 'false'
+      - name: 🔧 Corrigir arquivos Terraform (remove AWS profile)
         shell: bash
         run: |
           echo "🔧 Corrigindo arquivos Terraform para GitHub Actions..."
@@ -193,37 +179,33 @@ jobs:
           
           echo "✅ Arquivos Terraform corrigidos com sucesso!"
 
-      - name: Terraform Init
-        if: env.SKIP_TERRAFORM == 'false'
+      - name: 📦 Terraform Init
         working-directory: ${{ env.TF_PATH }}
         run: |
           terraform init -upgrade -reconfigure
           echo "✅ Terraform inicializado em: ${{ env.TF_PATH }}"
 
-      - name: Terraform Workspace
-        if: env.SKIP_TERRAFORM == 'false' && inputs.terraform-workspace != ''
+      - name: 🗂️ Terraform Workspace
+        if: ${{ inputs.terraform-workspace != '' }}
         working-directory: ${{ env.TF_PATH }}
         run: |
           terraform workspace select "${{ inputs.terraform-workspace }}" || \
           terraform workspace new "${{ inputs.terraform-workspace }}"
 
-      - name: Terraform Validate
-        if: env.SKIP_TERRAFORM == 'false'
+      - name: ✅ Terraform Validate
         working-directory: ${{ env.TF_PATH }}
         run: terraform validate -no-color
 
-      - name: Terraform Plan
-        if: env.SKIP_TERRAFORM == 'false'
+      - name: 📋 Terraform Plan
         working-directory: ${{ env.TF_PATH }}
         run: terraform plan -no-color -out=tfplan
 
-      - name: Terraform Apply
-        if: env.SKIP_TERRAFORM == 'false' && inputs.terraform-auto-apply
+      - name: 🚀 Terraform Apply
+        if: ${{ inputs.terraform-auto-apply }}
         working-directory: ${{ env.TF_PATH }}
         run: terraform apply -auto-approve tfplan
 
-      - name: Obter Outputs do Terraform
-        if: env.SKIP_TERRAFORM == 'false'
+      - name: 📊 Obter Outputs do Terraform
         id: terraform-outputs
         working-directory: ${{ env.TF_PATH }}
         run: |
@@ -237,13 +219,37 @@ jobs:
           echo "  Cluster: ${CLUSTER_NAME}"
           echo "  Endpoint: ${CLUSTER_ENDPOINT}"
 
-      # ============================================
-      # 3. CONFIGURAR KUBECTL (após Terraform)
-      # ============================================
-      - name: Configurar kubectl
-        if: env.SKIP_TERRAFORM == 'false' && (env.SKIP_BUILD == 'false' || env.SKIP_DEPLOY == 'false')
+  # ============================================
+  # JOB 2: BUILD - CONSTRUIR IMAGEM DOCKER
+  # ============================================
+  build:
+    if: ${{ !inputs.skip-build }}
+    name: "🔨 2. Build - Construir Imagem"
+    runs-on: ubuntu-latest
+    needs: terraform
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+      ECR_REGISTRY: ${{ inputs.ecr-registry }}
+    
+    outputs:
+      image-version: ${{ steps.build-meta.outputs.image-version }}
+      image-latest: ${{ steps.build-meta.outputs.image-latest }}
+      ecr-repository: ${{ steps.ecr-repo.outputs.ecr-repository }}
+
+    steps:
+      - name: 📥 Checkout Código
+        uses: actions/checkout@v4
+
+      - name: 🔑 Configurar AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: ⚙️ Configurar kubectl (para verificação)
         run: |
-          CLUSTER_NAME="${{ steps.terraform-outputs.outputs.cluster-name || env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}"
+          CLUSTER_NAME="${{ needs.terraform.outputs.cluster-name || env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}"
           
           echo "🔧 Configurando kubectl para cluster: ${CLUSTER_NAME}"
           
@@ -258,11 +264,7 @@ jobs:
           kubectl cluster-info
           kubectl get nodes
 
-      # ============================================
-      # 4. BUILD - CONSTRUIR IMAGEM DOCKER
-      # ============================================
-      - name: Definir Repositório ECR
-        if: env.SKIP_BUILD == 'false'
+      - name: 📦 Definir Repositório ECR
         id: ecr-repo
         shell: bash
         run: |
@@ -286,8 +288,7 @@ jobs:
           echo "  Registry: ${ECR_REGISTRY}"
           echo "  Repository: ${ECR_REPO}"
 
-      - name: Criar Repositório ECR (se necessário)
-        if: env.SKIP_BUILD == 'false'
+      - name: 🏗️ Criar Repositório ECR (se necessário)
         shell: bash
         run: |
           ECR_REPO="${{ steps.ecr-repo.outputs.ecr-repository }}"
@@ -302,12 +303,10 @@ jobs:
             echo "✅ Repositório ECR criado"
           fi
 
-      - name: Login no Amazon ECR
-        if: env.SKIP_BUILD == 'false'
+      - name: 🔐 Login no Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Definir Tags da Imagem
-        if: env.SKIP_BUILD == 'false'
+      - name: 🏷️ Definir Tags da Imagem
         id: build-meta
         shell: bash
         run: |
@@ -328,8 +327,7 @@ jobs:
           echo "  Latest: ${IMAGE_LATEST}"
           echo "  Env Tag: ${IMAGE_ENV_TAG}"
 
-      - name: Build Docker Image
-        if: env.SKIP_BUILD == 'false'
+      - name: 🐳 Build Docker Image
         run: |
           echo "🔨 Construindo imagem Docker..."
           
@@ -343,8 +341,7 @@ jobs:
           
           echo "✅ Imagens construídas e taggeadas"
 
-      - name: Push Docker Image para ECR
-        if: env.SKIP_BUILD == 'false'
+      - name: 📤 Push Docker Image para ECR
         run: |
           echo "📤 Enviando imagens para ECR..."
           
@@ -354,21 +351,58 @@ jobs:
           
           echo "✅ Imagens enviadas para ECR"
 
-      # ============================================
-      # 5. DEPLOY - IMPLANTAR NO EKS
-      # ============================================
-      - name: Atualizar Manifests com Imagem
-        if: env.SKIP_BUILD == 'false' && env.SKIP_DEPLOY == 'false'
+  # ============================================
+  # JOB 3: DEPLOY - IMPLANTAR NO EKS
+  # ============================================
+  deploy:
+    if: ${{ !inputs.skip-deploy }}
+    name: "🚀 3. Deploy - Aplicar ao Kubernetes"
+    runs-on: ubuntu-latest
+    needs: [terraform, build]
+    env:
+      K8S_MANIFEST_PATH: ${{ inputs.k8s-manifest-path }}
+      K8S_OVERLAY: ${{ inputs.k8s-overlay }}
+      DEPLOY_ADDONS: ${{ inputs.deploy-addons }}
+
+    steps:
+      - name: 📥 Checkout Código
+        uses: actions/checkout@v4
+
+      - name: 🔑 Configurar AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: ⚙️ Configurar kubectl
+        run: |
+          CLUSTER_NAME="${{ needs.terraform.outputs.cluster-name || env.PROJECT_NAME }}-${{ env.ENVIRONMENT }}"
+          
+          echo "🔧 Configurando kubectl para cluster: ${CLUSTER_NAME}"
+          
+          aws eks update-kubeconfig \
+            --name "${CLUSTER_NAME}" \
+            --region "${{ env.AWS_REGION }}"
+          
+          echo "✅ kubectl configurado"
+          
+          # Verificar conexão
+          echo "🔍 Verificando conexão com cluster..."
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: 📝 Atualizar Manifests com Imagem
         shell: bash
         run: |
           echo "📝 Atualizando manifests com nova imagem..."
           
-          IMAGE_TAG="${{ steps.build-meta.outputs.image-version }}"
+          IMAGE_TAG="${{ needs.build.outputs.image-version }}"
           
           # Para deployments usando kustomize
           if [ -f "${{ env.K8S_MANIFEST_PATH }}/overlays/${{ env.K8S_OVERLAY }}/kustomization.yaml" ]; then        
             echo "  Atualizando kustomization.yaml..."
-            sed -i "s|newTag: .*|newTag: \"${{ inputs.version-prefix }}.${{ env.BUILD_NUMBER }}\"|" \
+            sed -i "s|newTag: .*|newTag: \"${{ inputs.version-prefix }}.${{ github.run_number }}\"|" \
               "${{ env.K8S_MANIFEST_PATH }}/overlays/${{ env.K8S_OVERLAY }}/kustomization.yaml"
           fi
           
@@ -381,8 +415,7 @@ jobs:
           
           echo "✅ Manifests atualizados com imagem: ${IMAGE_TAG}"
 
-      - name: Aplicar Manifests Base Kubernetes
-        if: env.SKIP_DEPLOY == 'false'
+      - name: 🚀 Aplicar Manifests Base Kubernetes
         run: |
           echo "🚀 Aplicando manifests base Kubernetes..."
           
@@ -398,8 +431,7 @@ jobs:
           
           echo "✅ Manifests base aplicados"
 
-      - name: Aplicar Overlay do Ambiente
-        if: env.SKIP_DEPLOY == 'false'
+      - name: 🎨 Aplicar Overlay do Ambiente
         run: |
           echo "🎨 Aplicando overlay do ambiente: ${{ env.K8S_OVERLAY }}"
           
@@ -415,8 +447,8 @@ jobs:
             echo "⚠️  Overlay não encontrado, pulando..."
           fi
 
-      - name: Deployar Addons (Opcional)
-        if: env.SKIP_DEPLOY == 'false' && env.DEPLOY_ADDONS == 'true'
+      - name: 🔧 Deployar Addons (Opcional)
+        if: ${{ env.DEPLOY_ADDONS == 'true' }}
         run: |
           echo "🔧 Deployando addons..."
           
@@ -446,8 +478,7 @@ jobs:
           
           echo "✅ Addons deployados"
 
-      - name: Health Check e Verificação
-        if: env.SKIP_DEPLOY == 'false'
+      - name: 🏥 Health Check e Verificação
         run: |
           echo "🏥 HEALTH CHECK DO CLUSTER"
           echo "=========================="
@@ -475,10 +506,7 @@ jobs:
           echo ""
           echo "✅ Health check completado!"
 
-      # ============================================
-      # 6. OUTPUT FINAL E RELATÓRIO
-      # ============================================
-      - name: Gerar Relatório de Deploy
+      - name: 📋 Gerar Relatório de Deploy
         run: |
           echo "=========================================="
           echo "          DEPLOYMENT COMPLETED            "
@@ -487,29 +515,15 @@ jobs:
           echo "🌍 Environment: ${{ env.ENVIRONMENT }}"
           echo "📁 Project: ${{ env.PROJECT_NAME }}"
           echo "📍 AWS Region: ${{ env.AWS_REGION }}"
-          echo "🔄 Build Number: ${{ env.BUILD_NUMBER }}"
+          echo "🔄 Build Number: ${{ github.run_number }}"
           echo ""
-          
-          if [ "${{ env.SKIP_TERRAFORM }}" = "false" ]; then
-            echo "✅ Terraform: INFRAESTRUTURA APLICADA"
-            echo "   Cluster: ${{ steps.terraform-outputs.outputs.cluster-name || 'N/A' }}"
-          else
-            echo "⏭️  Terraform: SKIPPED"
-          fi
-          
-          if [ "${{ env.SKIP_BUILD }}" = "false" ]; then
-            echo "✅ Build: IMAGEM CONSTRUÍDA"
-            echo "   Image: ${{ steps.build-meta.outputs.image-version || 'N/A' }}"
-          else
-            echo "⏭️  Build: SKIPPED"
-          fi
-          
-          if [ "${{ env.SKIP_DEPLOY }}" = "false" ]; then
-            echo "✅ Deploy: APLICAÇÃO IMPLANTADA"
-            echo "   Kubernetes: Manifests aplicados"
-          else
-            echo "⏭️  Deploy: SKIPPED"
-          fi
-          
+          echo "✅ Terraform: INFRAESTRUTURA APLICADA"
+          echo "   Cluster: ${{ needs.terraform.outputs.cluster-name || 'N/A' }}"
+          echo ""
+          echo "✅ Build: IMAGEM CONSTRUÍDA"
+          echo "   Image: ${{ needs.build.outputs.image-version || 'N/A' }}"
+          echo ""
+          echo "✅ Deploy: APLICAÇÃO IMPLANTADA"
+          echo "   Kubernetes: Manifests aplicados"
           echo ""
           echo "=========================================="

@@ -51,7 +51,7 @@ on:
         value: ${{ jobs.build.outputs.registry }}
 
 jobs:
-  build AWS:
+  build:
     runs-on: ubuntu-latest
 
     outputs:

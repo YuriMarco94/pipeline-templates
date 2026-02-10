@@ -1,4 +1,4 @@
-name: Build Template AWS (ECR)
+name: 🏗️ Build Template AWS (ECR)
 
 on:
   workflow_call:
@@ -39,38 +39,38 @@ on:
 
 jobs:
   build:
-    name: Build & Push (ECR)
+    name: 🐳 Build & Push → ECR
     runs-on: ubuntu-latest
 
     outputs:
       image: ${{ steps.meta.outputs.image }}
 
     steps:
-      - name: Checkout
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: Validate Dockerfile exists
+      - name: ✅ Validate Dockerfile
         shell: bash
         run: |
           set -euo pipefail
           echo "Dockerfile path: '${{ inputs.dockerfile-path }}'"
           echo "Context: '${{ inputs.context }}'"
           if [ ! -f "${{ inputs.dockerfile-path }}" ]; then
-            echo "::error::Dockerfile not found at '${{ inputs.dockerfile-path }}'. Create it or update dockerfile-path."
+            echo "::error::❌ Dockerfile not found at '${{ inputs.dockerfile-path }}'. Create it or update dockerfile-path."
             echo "Repo tree (top 2 levels):"
             ls -la
             find . -maxdepth 2 -type f | sed 's|^\./||'
             exit 1
           fi
 
-      - name: Configure AWS Credentials
+      - name: 🔐 Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ inputs.aws-region }}
 
-      - name: Ensure ECR repo exists (env/project)
+      - name: 📦 Ensure ECR repo exists
         id: repo
         shell: bash
         run: |
@@ -81,10 +81,10 @@ jobs:
             aws ecr create-repository --repository-name "$ECR_REPO" >/dev/null
           echo "Using ECR repository: $ECR_REPO"
 
-      - name: Login to Amazon ECR
+      - name: 🔑 Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Define image tag (versioned)
+      - name: 🏷️ Define image tag
         id: meta
         shell: bash
         run: |
@@ -94,7 +94,7 @@ jobs:
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
           echo "Image: $IMAGE"
 
-      - name: Build & Push
+      - name: 🚀 Build & Push image
         shell: bash
         run: |
           set -euo pipefail

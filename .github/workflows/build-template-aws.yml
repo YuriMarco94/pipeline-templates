@@ -37,11 +37,6 @@ on:
         description: "Imagem gerada (tag versionada)"
         value: ${{ jobs.build.outputs.image }}
 
-env:
-  environment: ${{ inputs.environment }}
-  project: ${{ inputs.project }}
-  registry: ${{ inputs.registry }}
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -59,7 +54,6 @@ jobs:
           aws-region: ${{ inputs.aws-region }}
 
       - name: Ensure ECR repo exists (env/project)
-        id: repo
         shell: bash
         run: |
           ECR_REPO="${{ inputs.environment }}/${{ inputs.project }}"

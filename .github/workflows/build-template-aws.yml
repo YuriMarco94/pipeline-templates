@@ -39,12 +39,29 @@ on:
 
 jobs:
   build:
+    name: Build & Push (ECR)
     runs-on: ubuntu-latest
+
     outputs:
       image: ${{ steps.meta.outputs.image }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Dockerfile exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Dockerfile path: '${{ inputs.dockerfile-path }}'"
+          echo "Context: '${{ inputs.context }}'"
+          if [ ! -f "${{ inputs.dockerfile-path }}" ]; then
+            echo "::error::Dockerfile not found at '${{ inputs.dockerfile-path }}'. Create it or update dockerfile-path."
+            echo "Repo tree (top 2 levels):"
+            ls -la
+            find . -maxdepth 2 -type f | sed 's|^\./||'
+            exit 1
+          fi
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -54,12 +71,15 @@ jobs:
           aws-region: ${{ inputs.aws-region }}
 
       - name: Ensure ECR repo exists (env/project)
+        id: repo
         shell: bash
         run: |
+          set -euo pipefail
           ECR_REPO="${{ inputs.environment }}/${{ inputs.project }}"
           echo "ECR_REPO=$ECR_REPO" >> $GITHUB_ENV
           aws ecr describe-repositories --repository-names "$ECR_REPO" >/dev/null 2>&1 || \
             aws ecr create-repository --repository-name "$ECR_REPO" >/dev/null
+          echo "Using ECR repository: $ECR_REPO"
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -68,12 +88,18 @@ jobs:
         id: meta
         shell: bash
         run: |
+          set -euo pipefail
           VERSION="${{ inputs.version-prefix }}.${{ github.run_number }}"
           IMAGE="${{ inputs.registry }}/${ECR_REPO}:${VERSION}"
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          echo "Image: $IMAGE"
 
       - name: Build & Push
         shell: bash
         run: |
-          docker build -t "${{ steps.meta.outputs.image }}" -f "${{ inputs.dockerfile-path }}" "${{ inputs.context }}"
+          set -euo pipefail
+          docker build \
+            -t "${{ steps.meta.outputs.image }}" \
+            -f "${{ inputs.dockerfile-path }}" \
+            "${{ inputs.context }}"
           docker push "${{ steps.meta.outputs.image }}"

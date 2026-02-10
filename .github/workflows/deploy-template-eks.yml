@@ -18,7 +18,6 @@ on:
       image:
         required: false
         type: string
-        default: ""
     secrets:
       AWS_ACCESS_KEY_ID:
         required: true
@@ -27,10 +26,12 @@ on:
 
 jobs:
   deploy:
+    name: Deploy (kubectl apply)
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -40,24 +41,32 @@ jobs:
           aws-region: ${{ inputs.aws-region }}
 
       - name: Update kubeconfig
+        shell: bash
         run: |
+          set -euo pipefail
           aws eks update-kubeconfig \
             --name "${{ inputs.eks-cluster-name }}" \
             --region "${{ inputs.aws-region }}"
+          kubectl version --client=true
 
       - name: Apply manifests
+        shell: bash
         run: |
+          set -euo pipefail
+          echo "Applying manifests from: ${{ inputs.manifest-path }}"
           kubectl apply -f "${{ inputs.manifest-path }}"
 
-      - name: Set image (if provided)
+      - name: Set image (optional)
         if: ${{ inputs.image != '' }}
+        shell: bash
         run: |
-          kubectl set image deployment/echo \
-            -n "${{ inputs.namespace }}" \
-            echo="${{ inputs.image }}"
+          set -euo pipefail
+          echo "Setting image on deployment/echo in ns '${{ inputs.namespace }}' => '${{ inputs.image }}'"
+          kubectl set image deployment/echo -n "${{ inputs.namespace }}" echo="${{ inputs.image }}"
 
       - name: Rollout status
+        shell: bash
         run: |
-          kubectl rollout status deployment/echo \
-            -n "${{ inputs.namespace }}" \
-            --timeout=180s
+          set -euo pipefail
+          kubectl rollout status deployment/echo -n "${{ inputs.namespace }}" --timeout=180s
+          kubectl get ingress -n "${{ inputs.namespace }}" -o wide

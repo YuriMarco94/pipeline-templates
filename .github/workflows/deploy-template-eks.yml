@@ -3,14 +3,6 @@ name: Deploy Template AWS (EKS)
 on:
   workflow_call:
     inputs:
-      environment:
-        description: "Environment"
-        required: true
-        type: string
-      namespace:
-        description: "Namespace Kubernetes"
-        required: true
-        type: string
       aws-region:
         description: "AWS Region"
         required: true
@@ -20,25 +12,41 @@ on:
         required: true
         type: string
       manifest-path:
-        description: "Caminho dos manifests"
+        description: "Pasta/arquivo de manifests"
+        required: true
+        type: string
+      namespace:
+        description: "Namespace Kubernetes"
+        required: true
+        type: string
+      deployment-name:
+        description: "Deployment para rollout"
+        required: true
+        type: string
+      container-name:
+        description: "Nome do container no deployment"
+        required: true
+        type: string
+      image-uri:
+        description: "Se informado, faz kubectl set image"
         required: false
         type: string
-        default: "kubernetes/manifests"
-
-env:
-  environment: ${{ inputs.environment }}
-  namespace: ${{ inputs.namespace }}
+        default: ""
+      rollout-timeout:
+        description: "Timeout rollout"
+        required: false
+        type: string
+        default: "180s"
 
 jobs:
-  Deploy_To_EKS:
-    name: Deploy to EKS
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Código
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Configure AWS credentials (Access Keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -51,8 +59,23 @@ jobs:
             --name "${{ inputs.eks-cluster-name }}" \
             --region "${{ inputs.aws-region }}"
 
-      - name: Apply Manifests
+      - name: Apply manifests
         run: |
           kubectl apply -f "${{ inputs.manifest-path }}"
-          kubectl get ns
-          kubectl get pods -n "${{ inputs.namespace }}"
+
+      - name: Set image (optional)
+        if: ${{ inputs.image-uri != '' }}
+        run: |
+          kubectl set image deployment/${{ inputs.deployment-name }} \
+            -n ${{ inputs.namespace }} \
+            ${{ inputs.container-name }}=${{ inputs.image-uri }}
+
+      - name: Rollout status
+        run: |
+          kubectl rollout status deployment/${{ inputs.deployment-name }} \
+            -n ${{ inputs.namespace }} \
+            --timeout=${{ inputs.rollout-timeout }}
+
+      - name: Show ingress
+        run: |
+          kubectl get ingress -n ${{ inputs.namespace }} -o wide || true
